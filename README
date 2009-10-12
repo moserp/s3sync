@@ -78,7 +78,9 @@ Required:
 	If you don't know what these are, then s3sync is probably not the
 	right tool for you to be starting out with.
 Optional:
-	AWS_S3_HOST - I don't see why the default would ever be wrong
+	AWS_S3_HOST - Host on which to access the service
+  AWS_S3_PORT - Port on which to access the service
+  AWS_S3_VIRTUAL_PATH - the path of the service
    HTTP_PROXY_HOST,HTTP_PROXY_PORT,HTTP_PROXY_USER,HTTP_PROXY_PASSWORD - proxy
 	SSL_CERT_DIR - Where your Cert Authority keys live; for verification
 	SSL_CERT_FILE - If you have just one PEM file for CA verification

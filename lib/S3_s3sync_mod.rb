@@ -60,7 +60,7 @@ module S3
 		alias __make_request__ make_request
       def make_request(method, bucket='', key='', path_args={}, headers={}, data='', metadata={}, streamOut=nil)
          # build the path based on the calling format
-         path = ''
+         path = "#{@virtual_path}"
          if (not bucket.empty?) and (@calling_format == CallingFormat::REGULAR)
            path << "/#{bucket}"
          end
@@ -80,7 +80,7 @@ module S3
          set_headers(req, metadata, METADATA_PREFIX)
          set_headers(req, {'Connection' => 'keep-alive', 'Keep-Alive' => '300'})
          
-         set_aws_auth_header(req, @aws_access_key_id, @aws_secret_access_key, bucket, key, path_args)
+         set_aws_auth_header(req, @aws_access_key_id, @aws_secret_access_key, @virtual_path, bucket, key, path_args)
          
          http = $S3syncHttp
             

@@ -33,12 +33,13 @@ end
 # in another tool (such as your web browser for GETs).
 module S3
   DEFAULT_HOST = 's3.amazonaws.com'
+  DEFAULT_VIRTUAL_PATH = ''
   PORTS_BY_SECURITY = { true => 443, false => 80 }
   METADATA_PREFIX = 'x-amz-meta-'
   AMAZON_HEADER_PREFIX = 'x-amz-'
 
   # builds the canonical string for signing.
-  def S3.canonical_string(method, bucket="", path="", path_args={}, headers={}, expires=nil)
+  def S3.canonical_string(method, virtual_path, bucket="", path="", path_args={}, headers={}, expires=nil)
     interesting_headers = {}
     headers.each do |key, value|
       lk = key.downcase
@@ -74,6 +75,7 @@ module S3
       end
     end
 
+    buf << "#{virtual_path}"
     # build the path using the bucket and key
     if not bucket.empty?
       buf << "/#{bucket}"
@@ -93,7 +95,6 @@ module S3
     elsif path_args.has_key?('logging')
       buf << '?logging'
     end
-
     return buf
   end
 
@@ -137,11 +138,12 @@ module S3
     attr_accessor :calling_format
     
     def initialize(aws_access_key_id, aws_secret_access_key, is_secure=true,
-                   server=DEFAULT_HOST, port=PORTS_BY_SECURITY[is_secure],
+                   server=DEFAULT_HOST, port=PORTS_BY_SECURITY[is_secure], vpath=DEFAULT_VIRTUAL_PATH,
                    calling_format=CallingFormat::REGULAR)
       @aws_access_key_id = aws_access_key_id
       @aws_secret_access_key = aws_secret_access_key
       @server = server
+      @virtual_path = vpath
       @is_secure = is_secure
       @calling_format = calling_format
       @port = port
@@ -221,7 +223,6 @@ end
 
     private
     def make_request(method, bucket='', key='', path_args={}, headers={}, data='', metadata={})
-      
       # build the domain based on the calling format
       server = ''
       if bucket.empty?
@@ -234,11 +235,11 @@ end
       elsif @calling_format == CallingFormat::VANITY
         server = bucket 
       else
-        server = @server
+        server = "#{@server}"
       end
 
       # build the path based on the calling format
-      path = ''
+      path = "#{@virtual_path}"
       if (not bucket.empty?) and (@calling_format == CallingFormat::REGULAR)
         path << "/#{bucket}"
       end
@@ -260,7 +261,7 @@ end
         set_headers(req, headers)
         set_headers(req, metadata, METADATA_PREFIX)
 
-        set_aws_auth_header(req, @aws_access_key_id, @aws_secret_access_key, bucket, key, path_args)
+        set_aws_auth_header(req, @aws_access_key_id, @aws_secret_access_key, @virtual_path, bucket, key, path_args)
         if req.request_body_permitted?
           return http.request(req, data)
         else
@@ -285,7 +286,7 @@ end
     end
 
     # set the Authorization header using AWS signed header authentication
-    def set_aws_auth_header(request, aws_access_key_id, aws_secret_access_key, bucket='', key='', path_args={})
+    def set_aws_auth_header(request, aws_access_key_id, aws_secret_access_key, virtual_path='', bucket='', key='', path_args={})
       # we want to fix the date here if it's not already been done.
       request['Date'] ||= Time.now.httpdate
 
@@ -296,7 +297,7 @@ end
       request['Content-Type'] ||= ''
 
       canonical_string =
-        S3.canonical_string(request.method, bucket, key, path_args, request.to_hash, nil)
+        S3.canonical_string(request.method, virtual_path, bucket, key, path_args, request.to_hash, nil)
       encoded_canonical = S3.encode(aws_secret_access_key, canonical_string)
 
       request['Authorization'] = "AWS #{aws_access_key_id}:#{encoded_canonical}"
@@ -325,12 +326,13 @@ end
     DEFAULT_EXPIRES_IN = 60
 
     def initialize(aws_access_key_id, aws_secret_access_key, is_secure=true, 
-                   server=DEFAULT_HOST, port=PORTS_BY_SECURITY[is_secure], 
+                   server=DEFAULT_HOST, port=PORTS_BY_SECURITY[is_secure], vpath=DEFAULT_VIRTUAL_PATH,
                    format=CallingFormat::REGULAR)
       @aws_access_key_id = aws_access_key_id
       @aws_secret_access_key = aws_secret_access_key
       @protocol = is_secure ? 'https' : 'http'
       @server = server
+      @virtual_path = vpath
       @port = port
       @calling_format = format 
       # by default expire
@@ -429,11 +431,11 @@ end
       end
 
       canonical_string =
-        S3::canonical_string(method, bucket, key, path_args, headers, expires)
+        S3::canonical_string(method, @virtual_path, bucket, key, path_args, headers, expires)
       encoded_canonical =
         S3::encode(@aws_secret_access_key, canonical_string)
       
-      url = CallingFormat.build_url_base(@protocol, @server, @port, bucket, @calling_format)
+      url = CallingFormat.build_url_base(@protocol, @server, @port, @virtual_path, bucket, @calling_format)
 
       path_args["Signature"] = encoded_canonical.to_s
       path_args["Expires"] = expires.to_s
@@ -469,16 +471,16 @@ end
     VANITY    = 2  # http://<vanity_domain>/key  -- vanity_domain resolves to s3.amazonaws.com
 
     # build the url based on the calling format, and bucket
-    def CallingFormat.build_url_base(protocol, server, port, bucket, format)
+    def CallingFormat.build_url_base(protocol, server, port, vpath, bucket, format)
       build_url_base = "#{protocol}://"
       if bucket.empty?
-        build_url_base << "#{server}:#{port}"
+        build_url_base << "#{server}:#{port}/${vpath}"
       elsif format == SUBDOMAIN
-        build_url_base << "#{bucket}.#{server}:#{port}"
+        build_url_base << "#{bucket}.#{server}:#{port}/${vpath}"
       elsif format == VANITY
-        build_url_base << "#{bucket}:#{port}"
+        build_url_base << "#{bucket}:#{port}/${vpath}"
       else
-        build_url_base << "#{server}:#{port}/#{bucket}"
+        build_url_base << "#{server}:#{port}/${vpath}/#{bucket}"
       end
       return build_url_base 
     end
@@ -566,8 +568,10 @@ end
       elsif name == 'StorageClass'
         @curr_entry.storage_class = @curr_text
       elsif name == 'ID'
+        @curr_entry.owner = Owner.new if !@curr_entry.owner
         @curr_entry.owner.id = @curr_text
       elsif name == 'DisplayName'
+        @curr_entry.owner = Owner.new if !@curr_entry.owner
         @curr_entry.owner.display_name = @curr_text
       elsif name == 'CommonPrefixes'
         @common_prefixes << @common_prefix_entry         
